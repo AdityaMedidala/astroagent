@@ -1,0 +1,3 @@
+timestamp,cases,intent_rate,tool_rate,budget_rate,formed_rate,graceful_rate,p50_ms,p95_ms,total_input_tok,total_output_tok,failure_count
+2026-05-29T16:44:50+00:00,22,1.000,0.500,1.000,1.000,1.000,4967,7168,57443,2890,0
+2026-05-29T16:55:28+00:00,22,1.000,0.955,1.000,1.000,1.000,4407,5723,57850,3157,0
