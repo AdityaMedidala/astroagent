@@ -54,8 +54,12 @@ def _find_natal_house(transit_abs_pos: float, house_cusps: list[dict]) -> str:
 
 
 class GetDailyTransitsInput(BaseModel):
-    date: str = Field(
-        description="Date for transit calculation in YYYY-MM-DD format, e.g. '2026-05-29'."
+    date: Optional[str] = Field(
+        default=None,
+        description=(
+            "Date for transit calculation in YYYY-MM-DD format, e.g. '2026-05-29'. "
+            "Defaults to today's date if omitted or null."
+        ),
     )
     natal_chart: Optional[dict] = Field(
         default=None,
@@ -69,11 +73,12 @@ class GetDailyTransitsInput(BaseModel):
 
 
 @tool(args_schema=GetDailyTransitsInput)
-def get_daily_transits(date: str, natal_chart: Optional[dict] = None) -> dict:
+def get_daily_transits(date: Optional[str] = None, natal_chart: Optional[dict] = None) -> dict:
     """Retrieve current planetary transit positions for a given date.
 
     Calculates where each planet sits in the zodiac at noon UTC on the specified
-    date using the Swiss Ephemeris (offline mode).
+    date using the Swiss Ephemeris (offline mode). If date is omitted or null,
+    today's date is used automatically.
 
     If a natal_chart dict (from compute_birth_chart) is provided and contains
     house cusp data, each transiting planet also shows which natal house it
@@ -85,7 +90,11 @@ def get_daily_transits(date: str, natal_chart: Optional[dict] = None) -> dict:
     and retrograde status, plus optional natal context.
     On failure returns {"error": "<human-readable reason>"}.
     """
-    # 1. Validate date
+    # 1. Default date to today when not supplied
+    if not date:
+        date = datetime.date.today().isoformat()
+
+    # 2. Validate date
     try:
         d = datetime.date.fromisoformat(date)
     except ValueError:
