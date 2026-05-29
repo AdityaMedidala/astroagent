@@ -1,122 +1,143 @@
-import { useState } from 'react'
-import reactLogo from './assets/react.svg'
-import viteLogo from './assets/vite.svg'
-import heroImg from './assets/hero.png'
-import './App.css'
+import { useCallback, useEffect, useState } from 'react';
+import './App.css';
+import type { BirthDetails, ChatMessage } from './types';
+import { useChatStream } from './hooks/useChatStream';
+import { ChatView } from './components/ChatView';
+import { BirthDetailsForm } from './components/BirthDetailsForm';
 
-function App() {
-  const [count, setCount] = useState(0)
+const STORAGE_KEYS = {
+  messages:     'aradhana:messages',
+  birthDetails: 'aradhana:birthDetails',
+} as const;
 
-  return (
-    <>
-      <section id="center">
-        <div className="hero">
-          <img src={heroImg} className="base" width="170" height="179" alt="" />
-          <img src={reactLogo} className="framework" alt="React logo" />
-          <img src={viteLogo} className="vite" alt="Vite logo" />
-        </div>
-        <div>
-          <h1>Get started</h1>
-          <p>
-            Edit <code>src/App.tsx</code> and save to test <code>HMR</code>
-          </p>
-        </div>
-        <button
-          type="button"
-          className="counter"
-          onClick={() => setCount((count) => count + 1)}
-        >
-          Count is {count}
-        </button>
-      </section>
-
-      <div className="ticks"></div>
-
-      <section id="next-steps">
-        <div id="docs">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#documentation-icon"></use>
-          </svg>
-          <h2>Documentation</h2>
-          <p>Your questions, answered</p>
-          <ul>
-            <li>
-              <a href="https://vite.dev/" target="_blank">
-                <img className="logo" src={viteLogo} alt="" />
-                Explore Vite
-              </a>
-            </li>
-            <li>
-              <a href="https://react.dev/" target="_blank">
-                <img className="button-icon" src={reactLogo} alt="" />
-                Learn more
-              </a>
-            </li>
-          </ul>
-        </div>
-        <div id="social">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#social-icon"></use>
-          </svg>
-          <h2>Connect with us</h2>
-          <p>Join the Vite community</p>
-          <ul>
-            <li>
-              <a href="https://github.com/vitejs/vite" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#github-icon"></use>
-                </svg>
-                GitHub
-              </a>
-            </li>
-            <li>
-              <a href="https://chat.vite.dev/" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#discord-icon"></use>
-                </svg>
-                Discord
-              </a>
-            </li>
-            <li>
-              <a href="https://x.com/vite_js" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#x-icon"></use>
-                </svg>
-                X.com
-              </a>
-            </li>
-            <li>
-              <a href="https://bsky.app/profile/vite.dev" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#bluesky-icon"></use>
-                </svg>
-                Bluesky
-              </a>
-            </li>
-          </ul>
-        </div>
-      </section>
-
-      <div className="ticks"></div>
-      <section id="spacer"></section>
-    </>
-  )
+function loadFromStorage<T>(key: string): T | null {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? (JSON.parse(raw) as T) : null;
+  } catch {
+    return null;
+  }
 }
 
-export default App
+function saveToStorage(key: string, value: unknown): void {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    // quota exceeded — silently skip
+  }
+}
+
+export default function App() {
+  // ── Persisted birth details ───────────────────────────────────────────────
+  const [birthDetails, setBirthDetails] = useState<BirthDetails | null>(
+    () => loadFromStorage<BirthDetails>(STORAGE_KEYS.birthDetails)
+  );
+
+  // ── Modal visibility ──────────────────────────────────────────────────────
+  const [showForm, setShowForm] = useState(false);
+
+  // ── Chat draft (controlled at App level so clearing works across renders) ─
+  const [draft, setDraft] = useState('');
+
+  // ── Chat stream hook ──────────────────────────────────────────────────────
+  const { messages, streaming, error, sendMessage, retry, clearHistory, setMessages } =
+    useChatStream(birthDetails);
+
+  // ── Re-hydrate message history from localStorage on first mount ───────────
+  useEffect(() => {
+    const saved = loadFromStorage<ChatMessage[]>(STORAGE_KEYS.messages);
+    if (saved && saved.length > 0) {
+      // Clear any lingering streaming flags from a previous interrupted session
+      setMessages(saved.map(m => ({ ...m, streaming: false })));
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // ── Persist messages whenever they change ─────────────────────────────────
+  useEffect(() => {
+    if (messages.length > 0) {
+      saveToStorage(STORAGE_KEYS.messages, messages);
+    }
+  }, [messages]);
+
+  // ── Persist birth details ─────────────────────────────────────────────────
+  useEffect(() => {
+    saveToStorage(STORAGE_KEYS.birthDetails, birthDetails);
+  }, [birthDetails]);
+
+  const handleSaveBirthDetails = useCallback((details: BirthDetails) => {
+    setBirthDetails(details);
+    setShowForm(false);
+  }, []);
+
+  const handleClear = useCallback(() => {
+    clearHistory();
+    localStorage.removeItem(STORAGE_KEYS.messages);
+  }, [clearHistory]);
+
+  // ── Birth details summary string for the chip ─────────────────────────────
+  const birthSummary = birthDetails
+    ? `${birthDetails.date} · ${birthDetails.place}`
+    : null;
+
+  return (
+    <div className="app">
+      {/* ── Header ────────────────────────────────────────────────────────── */}
+      <header className="header">
+        <div className="header__brand">
+          <span className="header__title">Aradhana</span>
+          <span className="header__subtitle">A daily spiritual companion</span>
+        </div>
+
+        <div className="header__actions">
+          {birthSummary ? (
+            <button
+              className="birth-chip"
+              onClick={() => setShowForm(true)}
+              title="Edit birth details"
+            >
+              ✦ {birthSummary}
+            </button>
+          ) : (
+            <button
+              className="birth-chip"
+              onClick={() => setShowForm(true)}
+              title="Add birth details"
+            >
+              + Add birth details
+            </button>
+          )}
+
+          <button
+            className="btn-icon"
+            onClick={handleClear}
+            title="Clear conversation"
+            aria-label="Clear conversation"
+          >
+            ⟳
+          </button>
+        </div>
+      </header>
+
+      {/* ── Chat ──────────────────────────────────────────────────────────── */}
+      <ChatView
+        messages={messages}
+        streaming={streaming}
+        error={error}
+        onSend={sendMessage}
+        onRetry={retry}
+        draft={draft}
+        onDraftChange={setDraft}
+      />
+
+      {/* ── Birth details modal ────────────────────────────────────────────── */}
+      {showForm && (
+        <BirthDetailsForm
+          initial={birthDetails}
+          onSave={handleSaveBirthDetails}
+          onClose={() => setShowForm(false)}
+        />
+      )}
+    </div>
+  );
+}
