@@ -1,0 +1,18 @@
+[project]
+name = "astroagent"
+version = "0.1.0"
+description = "Add your description here"
+requires-python = ">=3.13"
+dependencies = [
+    "fastapi>=0.136.3",
+    "geopy>=2.4.1",
+    "kerykeion>=5.12.9",
+    "langchain-core>=1.4.0",
+    "langchain-google-genai>=4.2.4",
+    "langgraph>=1.2.2",
+    "pydantic>=2.13.4",
+    "python-dotenv>=1.2.2",
+    "sse-starlette>=3.4.4",
+    "timezonefinder>=8.2.4",
+    "uvicorn[standard]>=0.48.0",
+]
