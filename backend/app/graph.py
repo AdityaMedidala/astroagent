@@ -6,8 +6,10 @@ from dotenv import load_dotenv
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.runnables import Runnable
 from langchain_google_genai import ChatGoogleGenerativeAI
+from langgraph.config import get_config
 from langgraph.graph import END, StateGraph
 from langgraph.prebuilt import ToolNode, tools_condition
+from langgraph.types import interrupt
 from pydantic import BaseModel
 from app.state import AstroState
 from app.tools import geocode_place, compute_birth_chart, get_daily_transits, knowledge_lookup
@@ -135,6 +137,50 @@ def _get_editor_llm() -> ChatGoogleGenerativeAI:
     if _llm_editor is None:
         _llm_editor = ChatGoogleGenerativeAI(model="gemini-2.0-flash")
     return _llm_editor
+
+
+# ── Sensitivity classifier ────────────────────────────────────────────────────
+
+class _SensitivityResult(BaseModel):
+    is_sensitive: bool
+    reason: str | None = None
+
+
+_SENSITIVITY_PROMPT = """\
+You are a sensitivity classifier for an astrology AI assistant.
+
+Determine if the user's message is requesting a personal astrological reading on a
+SENSITIVE LIFE DOMAIN: health / illness, finances / money / career, or romantic /
+relationship outcomes.
+
+Return is_sensitive=True ONLY if the user is asking how their own chart, placements,
+or transits relate to their personal health, wealth, or romantic outcomes.
+
+Return is_sensitive=False if:
+- The request is about general astrology symbolism ("what does the 6th house mean")
+- The request is purely a chart computation
+- The request is about planetary transits without a personal reading framing
+- The message demands medical/legal/financial certainty (handled elsewhere)
+
+If is_sensitive=True, set reason to a single warm sentence naming the domain and
+noting that astrology offers symbolic perspective only. Example:
+"This reading touches on health and wellbeing themes — astrology offers symbolic
+reflection here, not medical guidance."
+
+Return only the structured output — no explanation.\
+"""
+
+_llm_sensitivity: Runnable | None = None
+
+
+def _get_sensitivity_llm() -> Runnable:
+    global _llm_sensitivity
+    if _llm_sensitivity is None:
+        _llm_sensitivity = (
+            ChatGoogleGenerativeAI(model="gemini-2.0-flash")
+            .with_structured_output(_SensitivityResult)
+        )
+    return _llm_sensitivity
 
 
 _EDITOR_SYSTEM = """\
@@ -267,16 +313,71 @@ async def editor(state: AstroState) -> dict[str, list[BaseMessage]]:
     return {"messages": [polished]}
 
 
+async def check_sensitivity(state: AstroState) -> dict:
+    """Pause before sensitive personal readings via LangGraph interrupt().
+
+    Guard order:
+    1. Adversarial intent → no-op (hard refusal stays with agent).
+    2. No thread_id in configurable → no-op (eval / scripts never set one).
+    3. LLM classifier returns is_sensitive=False → no-op.
+    4. Classifier confirms sensitivity → interrupt() fires.
+       On resume "approved"  → {"sensitive_decision": None} → agent runs normally.
+       On resume "declined"  → gentle decline message + {"sensitive_decision": "declined"}
+                               → route_after_sensitivity sends graph to END.
+    """
+    # Guard 1: adversarial — let agent handle with its hard-refusal system prompt
+    if state.get("intent") == IntentLabel.adversarial.value:
+        return {"sensitive_decision": None}
+
+    # Guard 2: no thread_id → eval / scripts — never interrupt() there
+    conf = get_config().get("configurable", {})
+    if not conf.get("thread_id"):
+        return {"sensitive_decision": None}
+
+    last_human: HumanMessage | None = next(
+        (m for m in reversed(state["messages"]) if isinstance(m, HumanMessage)),
+        None,
+    )
+    if last_human is None:
+        return {"sensitive_decision": None}
+
+    try:
+        result: _SensitivityResult = await _get_sensitivity_llm().ainvoke(
+            [
+                SystemMessage(content=_SENSITIVITY_PROMPT),
+                HumanMessage(content=str(last_human.content)),
+            ]
+        )
+    except Exception:
+        return {"sensitive_decision": None}   # fail open — never block a turn
+
+    if not result.is_sensitive:
+        return {"sensitive_decision": None}
+
+    decision: str = interrupt({"reason": result.reason or "Sensitive reading detected."})
+
+    if decision == "declined":
+        return {
+            "messages": [AIMessage(
+                content=(
+                    "Of course — no pressure at all. Whenever you'd like to explore "
+                    "something else together, I'm here."
+                )
+            )],
+            "sensitive_decision": "declined",
+        }
+
+    return {"sensitive_decision": None}   # approved → continue to agent
+
+
 # ── Routing functions ─────────────────────────────────────────────────────────
 
 def route_from_intent(state: AstroState) -> str:
-    """After classification: offtopic → decline, everything else → agent."""
+    """After classification: offtopic → decline, everything else → check_sensitivity."""
     intent = state.get("intent") or IntentLabel.freeform.value
     if intent == IntentLabel.offtopic.value:
         return "decline_offtopic"
-    # chart_request, daily_horoscope, freeform, adversarial all enter the agent loop.
-    # The agent's system prompt already handles adversarial refusals correctly.
-    return "agent"
+    return "check_sensitivity"   # was "agent"
 
 
 def should_continue(state: AstroState) -> str:
@@ -292,11 +393,19 @@ def should_continue(state: AstroState) -> str:
     return "tools" if tc != END else "editor"
 
 
+def route_after_sensitivity(state: AstroState) -> str:
+    """Route to END if user declined; proceed to agent otherwise."""
+    if state.get("sensitive_decision") == "declined":
+        return END
+    return "agent"
+
+
 # ── Graph assembly ────────────────────────────────────────────────────────────
 
 _builder = StateGraph(AstroState)
 _builder.add_node("route_intent", route_intent)
 _builder.add_node("decline_offtopic", decline_offtopic)
+_builder.add_node("check_sensitivity", check_sensitivity)
 _builder.add_node("agent", agent)
 _builder.add_node("tools", run_tools)
 _builder.add_node("editor", editor)
@@ -306,9 +415,14 @@ _builder.set_entry_point("route_intent")
 _builder.add_conditional_edges(
     "route_intent",
     route_from_intent,
-    {"decline_offtopic": "decline_offtopic", "agent": "agent"},
+    {"decline_offtopic": "decline_offtopic", "check_sensitivity": "check_sensitivity"},
 )
 _builder.add_edge("decline_offtopic", END)
+_builder.add_conditional_edges(
+    "check_sensitivity",
+    route_after_sensitivity,
+    {"agent": "agent", END: END},
+)
 _builder.add_conditional_edges(
     "agent",
     should_continue,

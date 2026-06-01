@@ -3,7 +3,7 @@ import json
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any, AsyncIterator
+from typing import Any, AsyncIterator, Literal
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
@@ -11,6 +11,7 @@ from langchain_core.messages.ai import AIMessageChunk
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+from langgraph.types import Command
 from app.graph import compile_graph
 from app.state import AstroState
 
@@ -69,6 +70,83 @@ def _parse_tool_result(content: str) -> dict:
     }
 
 
+async def _stream_response(
+    g,
+    input_,
+    config: dict,
+    thread_id: str,
+) -> AsyncIterator[dict[str, str]]:
+    async for item in g.astream(input_, stream_mode=["messages", "updates"], config=config):
+        mode, payload = item
+
+        # ── messages mode: individual streamed chunks ─────────────────────
+        if mode == "messages":
+            chunk, metadata = payload
+            node: str = metadata.get("langgraph_node", "")
+
+            # Text tokens from the editor — agent draft is internal only
+            if node == "editor" and isinstance(chunk, AIMessageChunk) and chunk.content:
+                yield {"data": json.dumps({"type": "token", "content": chunk.content})}
+
+            # Tool result arriving from the tools node
+            elif node == "tools" and isinstance(chunk, ToolMessage):
+                yield {"data": json.dumps({
+                    "type": "tool_end",
+                    "name": chunk.name or "",
+                    "result": _parse_tool_result(str(chunk.content)),
+                })}
+
+        # ── updates mode: full node output after it finishes ─────────────
+        elif mode == "updates":
+
+            # interrupt fired in check_sensitivity
+            if "__interrupt__" in payload:
+                for intr in payload["__interrupt__"]:
+                    reason = (
+                        intr.value.get("reason", "")
+                        if isinstance(intr.value, dict)
+                        else str(intr.value)
+                    )
+                    yield {"data": json.dumps({
+                        "type": "interrupt",
+                        "reason": reason,
+                        "thread_id": thread_id,
+                    })}
+
+            # check_sensitivity decline message (empty for non-sensitive turns)
+            if "check_sensitivity" in payload:
+                for msg in payload["check_sensitivity"].get("messages", []):
+                    if isinstance(msg, AIMessage) and msg.content:
+                        yield {"data": json.dumps({"type": "token", "content": str(msg.content)})}
+
+            # Intent label from the router
+            if "route_intent" in payload:
+                intent = payload["route_intent"].get("intent")
+                if intent:
+                    yield {"data": json.dumps({"type": "intent", "value": intent})}
+
+            # Tool calls decided by the agent
+            if "agent" in payload:
+                for msg in payload["agent"].get("messages", []):
+                    if isinstance(msg, AIMessage):
+                        for tc in (msg.tool_calls or []):
+                            name = tc.get("name", "") if isinstance(tc, dict) else tc.name
+                            args = tc.get("args", {}) if isinstance(tc, dict) else tc.args
+                            yield {"data": json.dumps({
+                                "type": "tool_start",
+                                "name": name,
+                                "args": args,
+                            })}
+
+            # Off-topic decline is a static AIMessage (never streams chunks)
+            if "decline_offtopic" in payload:
+                for msg in payload["decline_offtopic"].get("messages", []):
+                    if isinstance(msg, AIMessage) and msg.content:
+                        yield {"data": json.dumps({"type": "token", "content": str(msg.content)})}
+
+    yield {"data": json.dumps({"type": "done"})}
+
+
 @app.get("/health")
 async def health() -> dict[str, str]:
     return {"status": "ok"}
@@ -90,6 +168,7 @@ async def chat(req: ChatRequest, request: Request) -> EventSourceResponse:
             "messages": _to_messages(req.messages[-1:]),
             "birth_details": req.birth_details,
             "intent": None,
+            "sensitive_decision": None,
         }
     else:
         # No thread_id — stateless request (ephemeral uuid, no cross-request memory).
@@ -99,6 +178,7 @@ async def chat(req: ChatRequest, request: Request) -> EventSourceResponse:
             "birth_details": req.birth_details,
             "natal_chart": None,
             "intent": None,
+            "sensitive_decision": None,
         }
 
     config = {
@@ -106,62 +186,21 @@ async def chat(req: ChatRequest, request: Request) -> EventSourceResponse:
         "configurable": {"thread_id": thread_id},
     }
 
-    async def generate() -> AsyncIterator[dict[str, str]]:
-        async for item in g.astream(
-            state,
-            stream_mode=["messages", "updates"],
-            config=config,
-        ):
-            mode, payload = item
+    return EventSourceResponse(_stream_response(g, state, config, thread_id))
 
-            # ── messages mode: individual streamed chunks ─────────────────
-            if mode == "messages":
-                chunk, metadata = payload
-                node: str = metadata.get("langgraph_node", "")
 
-                # Text tokens from the editor — agent draft is internal only
-                if node == "editor" and isinstance(chunk, AIMessageChunk) and chunk.content:
-                    yield {"data": json.dumps({"type": "token", "content": chunk.content})}
+class ResumeRequest(BaseModel):
+    thread_id: str
+    decision: Literal["approved", "declined"]
 
-                # Tool result arriving from the tools node
-                elif node == "tools" and isinstance(chunk, ToolMessage):
-                    yield {"data": json.dumps({
-                        "type": "tool_end",
-                        "name": chunk.name or "",
-                        "result": _parse_tool_result(str(chunk.content)),
-                    })}
 
-            # ── updates mode: full node output after it finishes ──────────
-            elif mode == "updates":
-
-                # Intent label from the router
-                if "route_intent" in payload:
-                    intent = payload["route_intent"].get("intent")
-                    if intent:
-                        yield {"data": json.dumps({"type": "intent", "value": intent})}
-
-                # Tool calls decided by the agent
-                if "agent" in payload:
-                    for msg in payload["agent"].get("messages", []):
-                        if isinstance(msg, AIMessage):
-                            for tc in (msg.tool_calls or []):
-                                name = tc.get("name", "") if isinstance(tc, dict) else tc.name
-                                args = tc.get("args", {}) if isinstance(tc, dict) else tc.args
-                                yield {"data": json.dumps({
-                                    "type": "tool_start",
-                                    "name": name,
-                                    "args": args,
-                                })}
-
-                # Off-topic decline is a static AIMessage (never streams chunks)
-                if "decline_offtopic" in payload:
-                    for msg in payload["decline_offtopic"].get("messages", []):
-                        if isinstance(msg, AIMessage) and msg.content:
-                            yield {"data": json.dumps({
-                                "type": "token",
-                                "content": str(msg.content),
-                            })}
-
-        yield {"data": json.dumps({"type": "done"})}
-
-    return EventSourceResponse(generate())
+@app.post("/resume")
+async def resume_chat(req: ResumeRequest, request: Request) -> EventSourceResponse:
+    g = request.app.state.graph
+    config = {
+        "recursion_limit": 25,
+        "configurable": {"thread_id": req.thread_id},
+    }
+    return EventSourceResponse(
+        _stream_response(g, Command(resume=req.decision), config, req.thread_id)
+    )

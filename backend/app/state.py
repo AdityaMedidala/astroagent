@@ -10,3 +10,4 @@ class AstroState(TypedDict):
     birth_details: dict | None
     natal_chart: dict | None
     intent: str | None
+    sensitive_decision: str | None   # "declined" | None; always set explicitly by check_sensitivity
