@@ -27,6 +27,23 @@ _HOUSE_ATTRS = [
     "ninth_house", "tenth_house", "eleventh_house", "twelfth_house",
 ]
 
+# ── Memoization cache ─────────────────────────────────────────────────────────
+# Process-local in-memory cache for birth chart computations.
+# Key: (date, normalised_time_or_None, normalised_place_lower) tuple.
+# Value: the full chart dict returned by compute_birth_chart.
+# Not persistent — a server restart clears the cache and recomputes on demand.
+# In a multi-worker deployment each worker maintains its own independent cache.
+_chart_cache: dict[tuple[str, str | None, str], dict] = {}
+
+
+def _make_cache_key(date: str, time: Optional[str], place: str) -> tuple[str, str | None, str]:
+    """Normalise inputs into a hashable cache key."""
+    return (
+        date.strip(),
+        time.strip() if time else None,
+        place.strip().lower(),
+    )
+
 
 class ComputeBirthChartInput(BaseModel):
     date: str = Field(
@@ -58,6 +75,11 @@ def compute_birth_chart(date: str, place: str, time: Optional[str] = None) -> di
     status, plus Ascendant, Midheaven, and house cusps when time is known.
     On failure returns {"error": "<human-readable reason>"}.
     """
+    # 0. Cache lookup — return immediately if we've computed this chart before
+    _key = _make_cache_key(date, time, place)
+    if _key in _chart_cache:
+        return _chart_cache[_key]
+
     # 1. Validate and parse date
     try:
         d = datetime.date.fromisoformat(date)
@@ -164,4 +186,6 @@ def compute_birth_chart(date: str, place: str, time: Optional[str] = None) -> di
             "depending on actual birth time."
         )
 
+    # Store in cache before returning (only successful results, not errors)
+    _chart_cache[_key] = result
     return result
