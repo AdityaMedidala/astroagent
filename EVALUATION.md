@@ -149,3 +149,17 @@ Latency increase is roughly the round-trip time of one additional Gemini call. O
 **Reliability note.** The `2026-06-01T08:13:14` run recorded `failure_count: 2` alongside degraded deterministic rates (intent 0.909, tool 0.818, formed 0.909, graceful 0.800). Both failures were transient `INVALID_ARGUMENT` errors from the Gemini API; neither reproduced on the six-case re-run at `2026-06-01T08:16:02`, which passed all checks. The degraded rates are an artefact of those two aborted cases inflating the denominator, not a signal that the editor node introduced a correctness regression. The deterministic harness has no mechanism to distinguish API timeouts from logic failures — this is a known gap noted under "What I would fix with more time."
 
 **Trade-off summary.** The editor adds ~2.2 s of p50 latency and roughly doubles output token cost in exchange for a 0.93-point tone improvement on a 1–5 scale. For a reflective spiritual companion — where the character of the language is part of the product — this is an intentional trade. A latency-sensitive deployment could make the editor conditional (opt-in, or applied only on the final turn of a multi-turn session), but for the current single-turn evaluation context the quality gain justifies the cost.
+
+---
+
+## Stretch goal: cross-session memory
+
+Cross-session memory was implemented via LangGraph's `AsyncSqliteSaver` checkpointer, keyed on a `thread_id` field added to the `/chat` request body. State is persisted to a local SQLite file (`backend/astro_memory.db`). The frontend generates a stable UUID per conversation, stores it in `localStorage`, and resets it when the user clears the chat.
+
+Verified at two levels:
+
+**(1) Within-session.** A follow-up question ("What was my sun sign again?") sent in the same server process with the same `thread_id` — and no birth data or prior message history in the request body — received a correct answer from the restored checkpoint, confirming that `natal_chart` and message history survive between HTTP requests without the frontend re-sending them.
+
+**(2) Cross-session.** After a full server restart, a fresh process received only the follow-up question with the same `thread_id` and answered "Sun in Pisces" with no `compute_birth_chart` call, confirming the checkpoint survives process restarts. This is what distinguishes the backend persistence from the frontend `localStorage` persistence: `localStorage` only survives browser reloads; the SQLite checkpoint survives independent server restarts.
+
+**Honest caveat.** The agent's use of remembered state is non-deterministic. Across test runs it occasionally re-computed the chart rather than trusting the checkpoint — observed in 1 of 3 runs. This is a prompt-tuning opportunity, not a persistence failure: the checkpoint always restored the natal chart correctly, but the agent sometimes chose to call `compute_birth_chart` again anyway. The fix would be a system-prompt rule instructing the agent to prefer chart data already present in its context over recomputation. The persistence layer is working as intended; the agent's confidence in its own memory is the gap.

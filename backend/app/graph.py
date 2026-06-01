@@ -317,4 +317,9 @@ _builder.add_conditional_edges(
 _builder.add_edge("tools", "agent")
 _builder.add_edge("editor", END)
 
-graph = _builder.compile()
+def compile_graph(checkpointer=None):
+    """Compile the agent graph with an optional checkpointer.
+    Called by main.py with AsyncSqliteSaver; used here without one for scripts."""
+    return _builder.compile(checkpointer=checkpointer)
+
+graph = compile_graph()   # no checkpointer — scripts need no thread_id in config

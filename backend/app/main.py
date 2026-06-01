@@ -1,16 +1,34 @@
 from __future__ import annotations
 import json
+import uuid
+from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any, AsyncIterator
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 from langchain_core.messages.ai import AIMessageChunk
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
-from app.graph import graph
+from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+from app.graph import compile_graph
 from app.state import AstroState
 
-app = FastAPI(title="AstroAgent API")
+# Tool result payloads can be large (12 house cusps, 10 planets, notes…).
+# Truncate SSE events to this char limit so the browser stream stays snappy.
+_MAX_RESULT_CHARS = 1500
+
+_DB_PATH = Path(__file__).parent.parent / "astro_memory.db"
+
+
+@asynccontextmanager
+async def lifespan(app_: FastAPI):
+    async with AsyncSqliteSaver.from_conn_string(str(_DB_PATH)) as checkpointer:
+        app_.state.graph = compile_graph(checkpointer=checkpointer)
+        yield
+
+
+app = FastAPI(title="AstroAgent API", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -18,14 +36,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Tool result payloads can be large (12 house cusps, 10 planets, notes…).
-# Truncate SSE events to this char limit so the browser stream stays snappy.
-_MAX_RESULT_CHARS = 1500
-
 
 class ChatRequest(BaseModel):
     messages: list[dict[str, str]]
     birth_details: dict[str, Any] | None = None
+    thread_id: str | None = None
 
 
 def _to_messages(raw: list[dict[str, str]]) -> list[BaseMessage]:
@@ -60,19 +75,42 @@ async def health() -> dict[str, str]:
 
 
 @app.post("/chat")
-async def chat(req: ChatRequest) -> EventSourceResponse:
-    state: AstroState = {
-        "messages": _to_messages(req.messages),
-        "birth_details": req.birth_details,
-        "natal_chart": None,
-        "intent": None,
+async def chat(req: ChatRequest, request: Request) -> EventSourceResponse:
+    g = request.app.state.graph
+    thread_id = req.thread_id or str(uuid.uuid4())
+
+    if req.thread_id:
+        # Returning (or new) persistent thread.
+        # Pass only the new user message — natal_chart and prior messages
+        # live in the checkpoint and are restored automatically by LangGraph.
+        # natal_chart key is intentionally absent from this dict: LangGraph
+        # preserves non-reducer fields from the checkpoint when they are not
+        # present in the input update.
+        state: AstroState = {
+            "messages": _to_messages(req.messages[-1:]),
+            "birth_details": req.birth_details,
+            "intent": None,
+        }
+    else:
+        # No thread_id — stateless request (ephemeral uuid, no cross-request memory).
+        # Full history passed so the agent has context within the single request.
+        state = {
+            "messages": _to_messages(req.messages),
+            "birth_details": req.birth_details,
+            "natal_chart": None,
+            "intent": None,
+        }
+
+    config = {
+        "recursion_limit": 25,
+        "configurable": {"thread_id": thread_id},
     }
 
     async def generate() -> AsyncIterator[dict[str, str]]:
-        async for item in graph.astream(
+        async for item in g.astream(
             state,
             stream_mode=["messages", "updates"],
-            config={"recursion_limit": 25},
+            config=config,
         ):
             mode, payload = item
 

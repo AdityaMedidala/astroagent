@@ -15,7 +15,7 @@ function uid(): string {
   return Math.random().toString(36).slice(2, 10);
 }
 
-export function useChatStream(birthDetails: BirthDetails | null) {
+export function useChatStream(birthDetails: BirthDetails | null, threadId: string) {
   const [messages, setMessages]   = useState<ChatMessage[]>([]);
   const [streaming, setStreaming] = useState(false);
   const [error, setError]         = useState<string | null>(null);
@@ -46,7 +46,7 @@ export function useChatStream(birthDetails: BirthDetails | null) {
     }));
 
     // Include birth details if available so the backend can use natal chart context
-    const body: Record<string, unknown> = { messages: apiMessages };
+    const body: Record<string, unknown> = { messages: apiMessages, thread_id: threadId };
     if (birthDetails) {
       body.birth_details = {
         date: birthDetails.date,
@@ -162,7 +162,7 @@ export function useChatStream(birthDetails: BirthDetails | null) {
     } finally {
       setStreaming(false);
     }
-  }, [messages, streaming, birthDetails]);
+  }, [messages, streaming, birthDetails, threadId]);
 
   const retry = useCallback(() => {
     const lastUser = [...messages].reverse().find(m => m.role === 'user');

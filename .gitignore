@@ -46,3 +46,8 @@ frontend/.env.local
 
 # Logs
 *.log
+
+# LangGraph / SQLite checkpoint (local state — never commit)
+backend/astro_memory.db
+backend/astro_memory.db-wal
+backend/astro_memory.db-shm

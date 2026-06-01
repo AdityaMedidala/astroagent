@@ -8,6 +8,7 @@ import { BirthDetailsForm } from './components/BirthDetailsForm';
 const STORAGE_KEYS = {
   messages:     'aradhana:messages',
   birthDetails: 'aradhana:birthDetails',
+  threadId:     'aradhana:threadId',
 } as const;
 
 function loadFromStorage<T>(key: string): T | null {
@@ -33,6 +34,15 @@ export default function App() {
     () => loadFromStorage<BirthDetails>(STORAGE_KEYS.birthDetails)
   );
 
+  // ── Stable thread ID — persisted across reloads, reset on clear ───────────
+  const [threadId, setThreadId] = useState<string>(() => {
+    const stored = loadFromStorage<string>(STORAGE_KEYS.threadId);
+    if (stored) return stored;
+    const fresh = crypto.randomUUID();
+    saveToStorage(STORAGE_KEYS.threadId, fresh);
+    return fresh;
+  });
+
   // ── Modal visibility ──────────────────────────────────────────────────────
   const [showForm, setShowForm] = useState(false);
 
@@ -41,7 +51,7 @@ export default function App() {
 
   // ── Chat stream hook ──────────────────────────────────────────────────────
   const { messages, streaming, error, sendMessage, retry, clearHistory, setMessages } =
-    useChatStream(birthDetails);
+    useChatStream(birthDetails, threadId);
 
   // ── Re-hydrate message history from localStorage on first mount ───────────
   useEffect(() => {
@@ -73,6 +83,9 @@ export default function App() {
   const handleClear = useCallback(() => {
     clearHistory();
     localStorage.removeItem(STORAGE_KEYS.messages);
+    const fresh = crypto.randomUUID();
+    saveToStorage(STORAGE_KEYS.threadId, fresh);
+    setThreadId(fresh);
   }, [clearHistory]);
 
   // ── Birth details summary string for the chip ─────────────────────────────
