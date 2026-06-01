@@ -50,7 +50,7 @@ export default function App() {
   const [draft, setDraft] = useState('');
 
   // ── Chat stream hook ──────────────────────────────────────────────────────
-  const { messages, streaming, error, sendMessage, retry, clearHistory, setMessages } =
+  const { messages, streaming, error, pendingInterrupt, sendMessage, resume, retry, clearHistory, setMessages } =
     useChatStream(birthDetails, threadId);
 
   // ── Re-hydrate message history from localStorage on first mount ───────────
@@ -137,8 +137,10 @@ export default function App() {
         messages={messages}
         streaming={streaming}
         error={error}
+        pendingInterrupt={pendingInterrupt}
         onSend={sendMessage}
         onRetry={retry}
+        onResume={resume}
         draft={draft}
         onDraftChange={setDraft}
       />

@@ -631,6 +631,71 @@ input, textarea {
   margin-bottom: 4px;
 }
 
+/* ── Confirm card (HITL gentle check-in) ────────────────────────────────── */
+.confirm-card {
+  align-self: flex-start;
+  background: var(--color-gold-bg);
+  border: 1px solid #E8D0A0;
+  border-radius: var(--radius-lg);
+  border-bottom-left-radius: var(--radius-sm);
+  padding: 14px 18px 16px;
+  max-width: 480px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.confirm-card__symbol {
+  font-size: 15px;
+  color: var(--color-gold);
+  line-height: 1;
+}
+
+.confirm-card__reason {
+  font-family: var(--font-serif);
+  font-size: 16px;
+  color: var(--color-text);
+  line-height: 1.65;
+  margin: 0;
+}
+
+.confirm-card__actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 2px;
+}
+
+.confirm-card__approve {
+  padding: 7px 18px;
+  border-radius: var(--radius-md);
+  background: var(--color-accent);
+  color: white;
+  font-size: 13.5px;
+  font-weight: 500;
+  border: 1px solid transparent;
+  transition: background var(--transition);
+}
+
+.confirm-card__approve:hover {
+  background: #5a4f96;
+}
+
+.confirm-card__decline {
+  padding: 7px 18px;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-text-muted);
+  font-size: 13.5px;
+  font-weight: 500;
+  border: 1px solid var(--color-border);
+  transition: background var(--transition), color var(--transition);
+}
+
+.confirm-card__decline:hover {
+  background: var(--color-border-soft);
+  color: var(--color-text);
+}
+
 /* ── Birth details chip ──────────────────────────────────────────────────── */
 .birth-chip {
   display: inline-flex;

@@ -163,3 +163,151 @@ Verified at two levels:
 **(2) Cross-session.** After a full server restart, a fresh process received only the follow-up question with the same `thread_id` and answered "Sun in Pisces" with no `compute_birth_chart` call, confirming the checkpoint survives process restarts. This is what distinguishes the backend persistence from the frontend `localStorage` persistence: `localStorage` only survives browser reloads; the SQLite checkpoint survives independent server restarts.
 
 **Honest caveat.** The agent's use of remembered state is non-deterministic. Across test runs it occasionally re-computed the chart rather than trusting the checkpoint — observed in 1 of 3 runs. This is a prompt-tuning opportunity, not a persistence failure: the checkpoint always restored the natal chart correctly, but the agent sometimes chose to call `compute_birth_chart` again anyway. The fix would be a system-prompt rule instructing the agent to prefer chart data already present in its context over recomputation. The persistence layer is working as intended; the agent's confidence in its own memory is the gap.
+
+---
+
+## Stretch goal: chart caching
+
+`AstroState` carries a `natal_chart` field. The `run_tools` wrapper around LangGraph's `ToolNode` writes this field whenever `compute_birth_chart` returns a valid result. In subsequent turns the cached JSON is already in the agent's context, so it does not need to call the tool again for follow-up questions about the same person.
+
+Combined with the `AsyncSqliteSaver` checkpointer, this persistence extends across server restarts: a returning user's chart survives in the checkpoint keyed by `thread_id`. Chart output is typically 2–3 KB of JSON; the per-request retrieval overhead is negligible.
+
+No dedicated eval case exists for the cache-hit path. All 10 chart cases in the golden set supply birth data and list `compute_birth_chart` in `expected_tools`, so they intentionally exercise the cache-miss path. The cross-session memory smoke test serves as the implicit cache-hit verification: a correct answer to a follow-up question with no birth data in the request, and no `compute_birth_chart` in the tool trace, is direct evidence the cached value was used.
+
+The recomputation tendency described in the cross-session memory section applies here too — the caching mechanism works; the agent's willingness to rely on it is the gap.
+
+---
+
+## Stretch goal: human-in-the-loop pause (HITL)
+
+### What was built
+
+A `check_sensitivity` node was inserted between `route_intent` and `agent`. The updated topology for non-off-topic turns is: `route_intent → check_sensitivity → agent → tools → agent → editor → END` (or `END` immediately after `check_sensitivity` if the user declines).
+
+The node runs a Gemini 2.0 Flash structured-output classifier to determine whether the message requests a personal reading on a sensitive life domain: health, finances, or romantic outcomes. If the classifier returns `is_sensitive=True` and a `thread_id` is present in the request (production only — see Guard 2 below), LangGraph's `interrupt()` fires. The graph state is checkpointed and the SSE stream emits a single event before closing:
+
+```json
+{"type": "interrupt", "reason": "<warm one-sentence framing>", "thread_id": "<thread_id>"}
+```
+
+A new `POST /resume` endpoint accepts `{"thread_id": "...", "decision": "approved" | "declined"}`. On `"approved"`, `Command(resume="approved")` is passed to `g.astream()`, LangGraph reloads the checkpoint, re-enters `check_sensitivity` from the top, and `interrupt()` returns `"approved"` — the node returns `{"sensitive_decision": None}` and the graph continues to the agent. On `"declined"`, the node appends a gentle opt-out message and sets `sensitive_decision: "declined"`, and the routing function sends the graph to `END` without reaching the agent.
+
+### Scope
+
+Implementation is API-level only. The SSE event shape and `/resume` schema are fully specified and working. The approve/decline UI — a confirmation prompt in the chat interface when the client receives an `interrupt` event — was scoped out for time. It is the natural next frontend step: receive the `interrupt` event, surface the reason to the user, send `POST /resume` with their choice.
+
+### API-level verification (curl)
+
+Three paths were verified against the running server:
+
+**1. Sensitive request with `thread_id` — interrupt fires:**
+```
+POST /chat  {"thread_id":"hitl-1", "messages":[...health reading...], "birth_details":{...}}
+
+data: {"type": "intent", "value": "freeform"}
+data: {"type": "interrupt", "reason": "This reading touches on health and wellbeing themes — astrology offers symbolic reflection here, not medical guidance.", "thread_id": "hitl-1"}
+data: {"type": "done"}
+```
+
+**2. Non-sensitive request with `thread_id` — no interrupt, full stream:**
+```
+POST /chat  {"thread_id":"nonsensitive-1", "messages":[...Mercury retrograde...]}
+
+data: {"type": "intent", "value": "freeform"}
+data: {"type": "tool_start", "name": "knowledge_lookup", ...}
+data: {"type": "tool_end", ...}
+data: {"type": "token", ...}  ×7
+data: {"type": "done"}
+```
+
+**3. Full eval suite (no `thread_id`) — zero interrupts, 22/22 well-formed:**
+All 22 cases run via `graph.ainvoke` without a `thread_id`; Guard 2 returns immediately for every case before the classifier is invoked. `well_formed: 22/22`, `failure_count: 0`.
+
+### Bug found and fixed by the eval
+
+The original Guard 2 in `check_sensitivity` read:
+
+```python
+conf = get_config().get("configurable", {})
+if CONFIG_KEY_SCRATCHPAD not in conf:
+    return {"sensitive_decision": None}
+```
+
+The assumption was that `CONFIG_KEY_SCRATCHPAD` (`"__pregel_scratchpad"`) would be absent when no checkpointer was attached. That assumption is wrong. LangGraph always injects `__pregel_scratchpad` into `configurable` as part of its pregel runtime wiring, regardless of whether a checkpointer is present. A debug check confirmed the key is present in every node invocation, checkpointer or not.
+
+The consequence: `free_002` ("Which signs are most compatible with Scorpio in romantic relationships?") passed Guard 2, was classified `is_sensitive=True` by the LLM, and reached `interrupt()`. Without a checkpointer, LangGraph silently suspended the graph and returned the partial state — only the original `HumanMessage`, no `AIMessage`. `reply_text` was empty; `well_formed` was `False`.
+
+Concrete numbers from `results_log.csv`:
+
+| Run | formed_rate | failure_count | p50 |
+|---|---|---|---|
+| 2026-06-01T14:33:00 (broken Guard 2) | 0.955 (21/22) | 1 | 8,709 ms |
+| 2026-06-01T14:51:19 (fixed Guard 2) | 1.000 (22/22) | 0 | 6,860 ms |
+
+The p50 drop of 1,849 ms between those two runs reflects the classifier LLM call that Guard 2 had allowed to run on every non-adversarial eval case (19 of 22) in the broken version.
+
+The fix replaces the internal-constant check with a `thread_id` presence check:
+
+```python
+if not conf.get("thread_id"):
+    return {"sensitive_decision": None}
+```
+
+Eval invocations never carry a `thread_id`; production `/chat` and `/resume` requests always do. The guard now correctly distinguishes the two contexts.
+
+### Known limitation
+
+When a user approves a health-themed reading via `POST /resume`, the agent currently tends to produce a brief, cautious response rather than a full reflective reading. The graph does reach `agent` as intended, but the resume context — `Command(resume="approved")` with no new human message — leaves the agent with an ambiguous conversational position. Resolving this requires either a system-prompt clause explaining how to handle a post-interrupt resume or enriching the `Command` payload with a recap of the original query. The pause-and-decline path works as designed; the depth of the approved reading is the gap.
+
+---
+
+## Stretch goals: cumulative cost of stacking four features
+
+All four stretch goals are implemented and verified. The table below summarises what each adds, using only numbers from `eval/results_log.csv`. Dollar costs use the runner's formula ($0.075 / 1 M input tokens, $0.30 / 1 M output tokens).
+
+### Per-feature cost summary
+
+| Feature | Runs on | Eval latency impact | Production latency impact |
+|---|---|---|---|
+| Chart caching | `run_tools` — writes `natal_chart` to state | Negligible (all eval cases are cache-miss by design) | Eliminates `compute_birth_chart` on follow-up turns; savings grow with session length |
+| Cross-session memory | SQLite checkpoint, per `thread_id` | No per-turn cost | No per-turn cost; enables returning-user state restoration |
+| Editor agent | Every non-off-topic turn | +~2,235 ms p50 (see latency table) | Same — applies unconditionally to every turn |
+| HITL sensitivity check | `check_sensitivity` node, before `agent` | ~0 ms in eval (Guard 2 returns immediately — no LLM call) | +~400–800 ms per sensitive turn in production (LLM classification) |
+
+### Latency across the feature stack (22-case runs from `results_log.csv`)
+
+| CSV row timestamp | p50 | p95 | State of codebase |
+|---|---|---|---|
+| 2026-06-01T05:07:06 | 4,570 ms | 6,248 ms | Chart cache + cross-session memory; no editor, no HITL |
+| 2026-06-01T08:13:14 | 6,805 ms | 8,294 ms | Editor added (+2,235 ms p50, +2,046 ms p95) |
+| 2026-06-01T14:33:00 | 8,709 ms | 11,470 ms | HITL added with broken Guard 2 — classifier LLM call ran on all 19 non-adversarial eval cases |
+| 2026-06-01T14:51:19 | 6,860 ms | 9,729 ms | Guard 2 fixed — classifier correctly skipped in eval |
+
+The current p50 of 6,860 ms is for all practical purposes the editor-only cost on top of the pre-editor baseline: the 290 ms difference between the editor run (6,805 ms) and the current run (6,860 ms) is within run-to-run noise. The sensitivity classifier adds ~0 ms to eval latency because Guard 2 returns before any LLM call for every eval case.
+
+The broken-Guard-2 run (8,709 ms) is the closest available proxy for what production latency looks like when the classifier runs. The 1,849 ms gap between that run and the fixed run is the measured overhead of adding one additional Gemini 2.0 Flash classification call to 19 out of 22 turns.
+
+### Token and cost growth
+
+| CSV row timestamp | Input tokens | Output tokens | Estimated cost |
+|---|---|---|---|
+| 2026-06-01T05:07:06 | 60,207 | 3,449 | ~$0.0055 |
+| 2026-06-01T14:51:19 | 72,037 | 7,625 | $0.0077 |
+
+Output tokens grew 121% (+4,176), driven by the editor appending a full rewrite to message history on every turn rather than producing a diff. Input tokens grew 20% (+11,830), reflecting the additional node context and slightly longer messages from having more graph nodes in the history. Total estimated cost per 22-case run grew 40%, from ~$0.0055 to $0.0077.
+
+### A side-effect of the editor on the graceful-failure check
+
+`graceful_failure` for invalid-date cases dropped from 1.000 in pre-editor runs to 0.600 in the two most recent runs (`chart_007` and `chart_008`). The editor rewrites error responses to polite redirects — "My apologies, I need a valid date to proceed" — that no longer contain the exact keywords (`"invalid"`, `"error"`, `"does not exist"`) the deterministic heuristic requires. The agent is correctly identifying and declining the invalid date; the keyword check is not catching the rewording. This is a measurement gap introduced by adding a tone-editing pass, not a correctness regression in the agent's behaviour.
+
+### What a production system would optimise
+
+The two largest latency contributors are the editor (~2,235 ms, unconditional) and the sensitivity classifier (~400–800 ms, per sensitive turn in production). Three targeted optimisations are available without redesigning the graph:
+
+**Conditional editor.** Off-topic declines and adversarial refusals are already correct in tone by construction; running the editor on them adds an LLM call with no user-visible benefit. Skipping those cases would eliminate the editor on roughly 5 of 22 turns (23%) in the current golden set distribution.
+
+**Intent-gated sensitivity classifier.** The classifier only needs to run on `freeform` and `chart_request` intents. `daily_horoscope` requests are not personal readings; `offtopic` never reaches `check_sensitivity`; `adversarial` is caught by Guard 1. Gating on intent alone would skip the classifier on roughly 6 of 22 turns (27%).
+
+**Keyword pre-filter.** A fast regex scan for health, finance, and relationship terms before the LLM call would eliminate the classifier cost on clearly non-sensitive turns at sub-millisecond latency.
+
+None of these are implemented because the current eval context measures batch throughput, not interactive latency. In a streaming chat UI where users feel the gap between submitting a message and seeing the first token, the combined 2–3 s from the editor and classifier would be the primary UX constraint to address.

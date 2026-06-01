@@ -1,6 +1,7 @@
 import { useEffect, useRef, type KeyboardEvent, type ChangeEvent } from 'react';
-import type { ChatMessage } from '../types';
+import type { ChatMessage, PendingInterrupt } from '../types';
 import { Message } from './Message';
+import { ConfirmCard } from './ConfirmCard';
 
 const STARTER_PROMPTS = [
   'What does it mean to have Sun in Scorpio?',
@@ -12,8 +13,10 @@ interface ChatViewProps {
   messages: ChatMessage[];
   streaming: boolean;
   error: string | null;
+  pendingInterrupt: PendingInterrupt | null;
   onSend: (text: string) => void;
   onRetry: () => void;
+  onResume: (decision: 'approved' | 'declined') => void;
   draft: string;
   onDraftChange: (v: string) => void;
 }
@@ -22,18 +25,23 @@ export function ChatView({
   messages,
   streaming,
   error,
+  pendingInterrupt,
   onSend,
   onRetry,
+  onResume,
   draft,
   onDraftChange,
 }: ChatViewProps) {
-  const bottomRef  = useRef<HTMLDivElement>(null);
+  const bottomRef   = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  // Scroll to bottom whenever messages change
+  // Input is blocked while streaming OR while waiting for confirmation
+  const busy = streaming || !!pendingInterrupt;
+
+  // Scroll to bottom whenever messages change or the confirm card appears
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
+  }, [messages, pendingInterrupt]);
 
   // Auto-grow textarea
   useEffect(() => {
@@ -45,7 +53,7 @@ export function ChatView({
 
   function submit() {
     const text = draft.trim();
-    if (!text || streaming) return;
+    if (!text || busy) return;
     onDraftChange('');
     onSend(text);
   }
@@ -89,6 +97,12 @@ export function ChatView({
       ) : (
         <div className="message-list">
           {messages.map(m => <Message key={m.id} message={m} />)}
+
+          {/* Confirmation card — shown when backend paused on a sensitive topic */}
+          {pendingInterrupt && (
+            <ConfirmCard interrupt={pendingInterrupt} onResume={onResume} />
+          )}
+
           <div ref={bottomRef} />
         </div>
       )}
@@ -114,12 +128,12 @@ export function ChatView({
             value={draft}
             onChange={handleChange}
             onKeyDown={handleKeyDown}
-            disabled={streaming}
+            disabled={busy}
           />
           <button
             className="input-area__send"
             onClick={submit}
-            disabled={!draft.trim() || streaming}
+            disabled={!draft.trim() || busy}
             aria-label="Send message"
           >
             {streaming ? '⏸' : '↑'}

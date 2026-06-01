@@ -367,7 +367,18 @@ async def check_sensitivity(state: AstroState) -> dict:
             "sensitive_decision": "declined",
         }
 
-    return {"sensitive_decision": None}   # approved → continue to agent
+    # approved → inject a one-turn system nudge so the agent gives a full reading
+    approval_note = SystemMessage(
+        content=(
+            "The user has seen the sensitivity note and chosen to proceed. "
+            "Offer a warm, symbolic, reflective reading grounded in the relevant "
+            "houses, placements, or transits — framed entirely as personal reflection "
+            "and archetypal symbolism. Never present any interpretation as medical, "
+            "financial, or predictive certainty. Do not defer or ask for more details "
+            "before responding; give the reading now with what you have."
+        )
+    )
+    return {"messages": [approval_note], "sensitive_decision": None}
 
 
 # ── Routing functions ─────────────────────────────────────────────────────────

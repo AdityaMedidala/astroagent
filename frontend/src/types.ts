@@ -30,3 +30,8 @@ export interface BirthDetails {
   timeKnown: boolean;
   place: string;
 }
+
+export interface PendingInterrupt {
+  reason: string;    // warm one-sentence framing from the backend classifier
+  threadId: string;  // needed to POST /resume
+}
