@@ -1,5 +1,7 @@
 """
 Start the server, stream /chat, and print every SSE event in order.
+Expected sequence: intent → (tool_start → tool_end)* → token… → done
+Tokens originate from the editor node (polished reply), not the agent draft.
 Usage: cd backend && python scripts/test_stream.py
 """
 from __future__ import annotations

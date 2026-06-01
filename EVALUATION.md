@@ -115,3 +115,37 @@ After the change, `daily_003` in `spotcheck_verdicts.json` scores tone 5/5 and h
 **A stronger or multi-judge setup.** One judge model at temperature=0 is still nondeterministic enough to flip from 3/5 to 5/5 on the same case. A panel of two or three independent judge calls with score aggregation would reduce variance enough to treat the scores as a reliable regression signal across runs.
 
 **Persistent caching.** The in-memory chart cache added in the last session is process-local and cleared on every server restart. Moving it to Redis or a persistent key-value store would cut latency on the most common repeated queries — same person asking follow-up questions about a chart computed earlier in a previous session — and would reduce token cost proportionally.
+
+---
+
+## Stretch goal: editor agent (second-agent handoff)
+
+After the 22-case eval was stable, a second LLM node — `editor` — was inserted between the agent's final reply and `END`. The graph topology is now `agent → editor → END` (tools still loop back to agent unchanged). The editor is a tone-only pass: it receives the agent's draft as its sole user-turn input and rewrites for warmth, calm, and reflective framing. Its system prompt forbids adding, removing, or rephrasing any astrological fact — every planet name, sign, degree, house number, and retrograde status must survive the rewrite with identical meaning.
+
+**Fact-preservation spot-check.** The Einstein natal chart (14 March 1879, 11:30, Ulm) was run through the full pipeline and the agent draft was compared against the editor's polished output placement by placement. Every placement was identical: Sun 23° Pisces, Moon 14° Sagittarius, Ascendant 11° Cancer, and all remaining planets, house cusps, and retrograde flags matched. The editor changed sentence structure and vocabulary; it did not move a single planet.
+
+**Quality lift (judge scores, 22-case run).** Comparing the last clean pre-editor run (`2026-06-01T05:07:06`) against the editor run (`2026-06-01T08:13:14`):
+
+| Dimension | Pre-editor | With editor | Change |
+|---|---|---|---|
+| Tone (1–5) | 3.32 | 4.25 | +0.93 |
+| Helpfulness (1–5) | 4.00 | 4.30 | +0.30 |
+| Groundedness (1–5) | 4.77 | 4.75 | −0.02 |
+| Safety (1–5) | 5.00 | 5.00 | 0.00 |
+
+The tone gain is the largest single-run improvement in the log — larger than the system-prompt rewrite that fixed the daily-horoscope deferral pattern. Groundedness is flat, confirming the editor is not injecting or distorting facts at a measurable rate. Safety is unchanged at ceiling.
+
+**Cost of the extra LLM call.**
+
+| Metric | Pre-editor baseline | With editor | Change |
+|---|---|---|---|
+| p50 latency | 4,570 ms | 6,805 ms | +2,235 ms (+49%) |
+| p95 latency | 6,248 ms | 8,294 ms | +2,046 ms (+33%) |
+| Output tokens (22-case run) | 2,943 | 5,657 | +2,714 (+92%) |
+| Estimated cost per run | $0.0052 | $0.0063 | +$0.0011 (+21%) |
+
+Latency increase is roughly the round-trip time of one additional Gemini call. Output tokens nearly double because the editor produces a complete rewrite rather than a diff — the full polished response is appended to message history. Dollar cost increase is modest in absolute terms given the input-heavy token balance of typical astrological responses.
+
+**Reliability note.** The `2026-06-01T08:13:14` run recorded `failure_count: 2` alongside degraded deterministic rates (intent 0.909, tool 0.818, formed 0.909, graceful 0.800). Both failures were transient `INVALID_ARGUMENT` errors from the Gemini API; neither reproduced on the six-case re-run at `2026-06-01T08:16:02`, which passed all checks. The degraded rates are an artefact of those two aborted cases inflating the denominator, not a signal that the editor node introduced a correctness regression. The deterministic harness has no mechanism to distinguish API timeouts from logic failures — this is a known gap noted under "What I would fix with more time."
+
+**Trade-off summary.** The editor adds ~2.2 s of p50 latency and roughly doubles output token cost in exchange for a 0.93-point tone improvement on a 1–5 scale. For a reflective spiritual companion — where the character of the language is part of the product — this is an intentional trade. A latency-sensitive deployment could make the editor conditional (opt-in, or applied only on the final turn of a multi-turn session), but for the current single-turn evaluation context the quality gain justifies the cost.

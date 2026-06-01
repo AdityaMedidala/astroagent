@@ -81,8 +81,8 @@ async def chat(req: ChatRequest) -> EventSourceResponse:
                 chunk, metadata = payload
                 node: str = metadata.get("langgraph_node", "")
 
-                # Text tokens from the agent — exclude the router's JSON output
-                if node == "agent" and isinstance(chunk, AIMessageChunk) and chunk.content:
+                # Text tokens from the editor — agent draft is internal only
+                if node == "editor" and isinstance(chunk, AIMessageChunk) and chunk.content:
                     yield {"data": json.dumps({"type": "token", "content": chunk.content})}
 
                 # Tool result arriving from the tools node

@@ -10,7 +10,7 @@ AstroAgent takes a birth date and place (time optional), a question about today'
 
 ## Architecture
 
-**Flow: router classifies intent → off-topic short-circuits → everything else enters the agent ⇄ tools loop with a 6-call budget.**
+**Flow: router classifies intent → off-topic short-circuits → everything else enters the agent ⇄ tools loop with a 6-call budget → editor rewrites the final reply for tone.**
 
 The diagram below is generated from the compiled graph at runtime — not hand-drawn.
 
@@ -26,14 +26,16 @@ graph TD;
 	decline_offtopic(decline_offtopic)
 	agent(agent)
 	tools(tools)
+	editor(editor)
 	__end__([<p>__end__</p>]):::last
 	__start__ --> route_intent;
-	agent -.-> __end__;
+	agent -.-> editor;
 	agent -.-> tools;
 	route_intent -.-> agent;
 	route_intent -.-> decline_offtopic;
 	tools --> agent;
 	decline_offtopic --> __end__;
+	editor --> __end__;
 	classDef default fill:#f2f0ff,line-height:1.2
 	classDef first fill-opacity:0
 	classDef last fill:#bfb6fc

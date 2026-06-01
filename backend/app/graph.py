@@ -97,6 +97,7 @@ _MAX_TOOL_CALLS = 6  # hard cap; eval grades tool-call count so this matters
 _router_llm: Runnable | None = None
 _llm_with_tools: ChatGoogleGenerativeAI | None = None
 _llm_bare: ChatGoogleGenerativeAI | None = None
+_llm_editor: ChatGoogleGenerativeAI | None = None
 
 
 def _get_router_llm() -> Runnable:
@@ -126,6 +127,37 @@ def _get_bare_llm() -> ChatGoogleGenerativeAI:
     if _llm_bare is None:
         _llm_bare = ChatGoogleGenerativeAI(model="gemini-2.0-flash")
     return _llm_bare
+
+
+def _get_editor_llm() -> ChatGoogleGenerativeAI:
+    """Tone-editor LLM singleton — no tools, rewrites warmth/flow only."""
+    global _llm_editor
+    if _llm_editor is None:
+        _llm_editor = ChatGoogleGenerativeAI(model="gemini-2.0-flash")
+    return _llm_editor
+
+
+_EDITOR_SYSTEM = """\
+You are Aradhana's tone editor. You receive a draft reply from an astrology \
+assistant and rewrite it with warmer, calmer, more reflective language suited \
+to a daily spiritual companion.
+
+You are a TONE editor ONLY — never a fact editor.
+
+Rules you must never break:
+1. Every specific astrological claim in the draft — planet name, zodiac sign, \
+   degree, house number, retrograde status — must appear in your output with \
+   exactly the same meaning. Do not rephrase a factual claim in a way that \
+   changes which sign, degree, or house is named.
+2. Do not add astrological facts not present in the draft.
+3. Do not remove astrological facts from the draft.
+4. If the draft declines a request (off-topic, adversarial, medical, financial), \
+   preserve the refusal — only soften the phrasing.
+
+What you may improve: sentence flow, warmth of vocabulary, paragraph breaks, \
+reflective framing ("you might notice…", "this can invite…"), and a gentle \
+invitational close. Keep replies concise — do not pad.\
+"""
 
 
 # ── Nodes ─────────────────────────────────────────────────────────────────────
@@ -216,6 +248,25 @@ async def run_tools(state: AstroState) -> dict:
     return {**result, "natal_chart": new_natal_chart}
 
 
+async def editor(state: AstroState) -> dict[str, list[BaseMessage]]:
+    """Tone-editing pass: rewarms the agent's draft without altering facts.
+
+    Scans backward through messages for the last AIMessage (the agent's final
+    draft), sends it to the editor LLM with the tone-only system prompt, and
+    appends the polished reply to messages.
+    """
+    draft = next(
+        (m for m in reversed(state["messages"]) if isinstance(m, AIMessage)),
+        None,
+    )
+    if not draft or not draft.content:
+        return {"messages": []}
+    polished: AIMessage = await _get_editor_llm().ainvoke(
+        [SystemMessage(content=_EDITOR_SYSTEM), HumanMessage(content=str(draft.content))]
+    )
+    return {"messages": [polished]}
+
+
 # ── Routing functions ─────────────────────────────────────────────────────────
 
 def route_from_intent(state: AstroState) -> str:
@@ -229,14 +280,16 @@ def route_from_intent(state: AstroState) -> str:
 
 
 def should_continue(state: AstroState) -> str:
-    """Route to 'tools' if the last AIMessage has tool calls, else end.
+    """Route to 'tools' if the last AIMessage has tool calls, else to 'editor'.
 
-    Hard budget guard: forces END if _MAX_TOOL_CALLS ToolMessages already exist.
+    Hard budget guard: forces 'editor' if _MAX_TOOL_CALLS ToolMessages already
+    exist so the agent cannot emit further tool calls.
     """
     tool_calls_made = sum(1 for m in state["messages"] if isinstance(m, ToolMessage))
     if tool_calls_made >= _MAX_TOOL_CALLS:
-        return END
-    return tools_condition(state)  # "tools" or "__end__"
+        return "editor"
+    tc = tools_condition(state)
+    return "tools" if tc != END else "editor"
 
 
 # ── Graph assembly ────────────────────────────────────────────────────────────
@@ -246,6 +299,7 @@ _builder.add_node("route_intent", route_intent)
 _builder.add_node("decline_offtopic", decline_offtopic)
 _builder.add_node("agent", agent)
 _builder.add_node("tools", run_tools)
+_builder.add_node("editor", editor)
 
 _builder.set_entry_point("route_intent")
 
@@ -258,8 +312,9 @@ _builder.add_edge("decline_offtopic", END)
 _builder.add_conditional_edges(
     "agent",
     should_continue,
-    {"tools": "tools", END: END},
+    {"tools": "tools", "editor": "editor"},
 )
 _builder.add_edge("tools", "agent")
+_builder.add_edge("editor", END)
 
 graph = _builder.compile()
