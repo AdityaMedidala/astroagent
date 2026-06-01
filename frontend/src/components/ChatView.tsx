@@ -75,21 +75,37 @@ export function ChatView({
     <div className="chat-view">
       {isEmpty ? (
         <div className="empty-state">
-          <div className="empty-state__symbol">✦</div>
-          <h1 className="empty-state__title">Aradhana</h1>
+          {/* Hero card with gradient background */}
+          <div className="hero-card">
+            <div className="hero-card__rings">
+              <div className="hero-ring hero-ring--1"></div>
+              <div className="hero-ring hero-ring--2"></div>
+              <div className="hero-ring hero-ring--3"></div>
+            </div>
+            <div className="empty-state__symbol">✦</div>
+            <h1 className="empty-state__title">Aradhana</h1>
+            <p className="empty-state__subtitle">Your daily spiritual companion</p>
+          </div>
+
           <p className="empty-state__body">
-            A daily companion for self-reflection through astrology.
-            Ask about your natal chart, today's planetary sky, or the symbolism
-            behind signs and houses.
+            Begin with any question — your natal chart, today's sky,
+            or the meaning behind a sign or placement.
           </p>
+
+          <div className="empty-state__divider">
+            <span className="divider-star">✧</span>
+          </div>
+
           <div className="empty-state__prompts">
-            {STARTER_PROMPTS.map(p => (
+            {STARTER_PROMPTS.map((p, i) => (
               <button
                 key={p}
                 className="prompt-chip"
                 onClick={() => { onDraftChange(p); textareaRef.current?.focus(); }}
               >
-                {p}
+                <span className="prompt-chip__icon">{['☉', '☽', '⚹'][i]}</span>
+                <span className="prompt-chip__text">{p}</span>
+                <span className="prompt-chip__arrow">→</span>
               </button>
             ))}
           </div>
@@ -119,27 +135,29 @@ export function ChatView({
 
       {/* Input area */}
       <div className="input-area">
-        <div className="input-area__row">
-          <textarea
-            ref={textareaRef}
-            className="input-area__textarea"
-            rows={1}
-            placeholder="Ask about your chart, today's sky, or any astrological question…"
-            value={draft}
-            onChange={handleChange}
-            onKeyDown={handleKeyDown}
-            disabled={busy}
-          />
-          <button
-            className="input-area__send"
-            onClick={submit}
-            disabled={!draft.trim() || busy}
-            aria-label="Send message"
-          >
-            {streaming ? '⏸' : '↑'}
-          </button>
+        <div className="input-area__container">
+          <div className="input-area__row">
+            <textarea
+              ref={textareaRef}
+              className="input-area__textarea"
+              rows={1}
+              placeholder="Ask about your chart, today's sky, or any astrological question…"
+              value={draft}
+              onChange={handleChange}
+              onKeyDown={handleKeyDown}
+              disabled={busy}
+            />
+            <button
+              className="input-area__send"
+              onClick={submit}
+              disabled={!draft.trim() || busy}
+              aria-label="Send message"
+            >
+              {streaming ? '⏸' : '✦'}
+            </button>
+          </div>
+          <p className="input-area__hint">Enter to send · Shift+Enter for new line</p>
         </div>
-        <p className="input-area__hint">Enter to send · Shift+Enter for new line</p>
       </div>
     </div>
   );

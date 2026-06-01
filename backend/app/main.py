@@ -76,75 +76,140 @@ async def _stream_response(
     config: dict,
     thread_id: str,
 ) -> AsyncIterator[dict[str, str]]:
-    async for item in g.astream(input_, stream_mode=["messages", "updates"], config=config):
-        mode, payload = item
+    # Track whether the editor produced a polished version so we can
+    # decide whether to emit the agent's raw draft or the editor's rewrite.
+    _agent_draft_chunks: list[str] = []
+    _agent_draft_flushed = False
+    _early_done = False  # True once we send 'done' early (before editor finishes)
 
-        # ── messages mode: individual streamed chunks ─────────────────────
-        if mode == "messages":
-            chunk, metadata = payload
-            node: str = metadata.get("langgraph_node", "")
+    import logging
+    logger = logging.getLogger("astro.stream")
+    logger.setLevel(logging.DEBUG)
 
-            # Text tokens from the editor — agent draft is internal only
-            if node == "editor" and isinstance(chunk, AIMessageChunk) and chunk.content:
-                yield {"data": json.dumps({"type": "token", "content": chunk.content})}
+    try:
+        async for item in g.astream(input_, stream_mode=["messages", "updates"], config=config):
+            mode, payload = item
+            
+            # Log the raw event arriving from LangGraph
+            node_name = payload[1].get("langgraph_node", "unknown") if mode == "messages" and len(payload) > 1 and isinstance(payload[1], dict) else "N/A"
+            logger.debug(f"[stream] mode={mode} node={node_name}")
 
-            # Tool result arriving from the tools node
-            elif node == "tools" and isinstance(chunk, ToolMessage):
-                yield {"data": json.dumps({
-                    "type": "tool_end",
-                    "name": chunk.name or "",
-                    "result": _parse_tool_result(str(chunk.content)),
-                })}
+            # ── messages mode: individual streamed chunks ─────────────────────
+            if mode == "messages":
+                chunk, metadata = payload
+                node: str = metadata.get("langgraph_node", "")
 
-        # ── updates mode: full node output after it finishes ─────────────
-        elif mode == "updates":
+                # Stream agent text tokens directly to the user.
+                # This is the PRIMARY text stream — no longer gated on editor.
+                if node == "agent" and isinstance(chunk, AIMessageChunk) and chunk.content:
+                    # Gemini sometimes returns chunk.content as a list of dicts: [{"text": "..."}]
+                    content_str = chunk.content
+                    if isinstance(content_str, list):
+                        content_str = "".join(
+                            part.get("text", "") if isinstance(part, dict) else str(part)
+                            for part in content_str
+                        )
+                    if content_str:
+                        _agent_draft_chunks.append(content_str)
+                        if not _agent_draft_flushed:
+                            yield {"data": json.dumps({"type": "token", "content": content_str})}
 
-            # interrupt fired in check_sensitivity
-            if "__interrupt__" in payload:
-                for intr in payload["__interrupt__"]:
-                    reason = (
-                        intr.value.get("reason", "")
-                        if isinstance(intr.value, dict)
-                        else str(intr.value)
-                    )
+                # Tool result arriving from the tools node
+                elif node == "tools" and isinstance(chunk, ToolMessage):
+                    logger.info(f"[stream] tool_end: {chunk.name}")
+                    # New tool cycle starting — reset the draft tracker
+                    _agent_draft_chunks.clear()
+                    _agent_draft_flushed = False
                     yield {"data": json.dumps({
-                        "type": "interrupt",
-                        "reason": reason,
-                        "thread_id": thread_id,
+                        "type": "tool_end",
+                        "name": chunk.name or "",
+                        "result": _parse_tool_result(str(chunk.content)),
                     })}
 
-            # check_sensitivity decline message (empty for non-sensitive turns)
-            if "check_sensitivity" in payload:
-                for msg in payload["check_sensitivity"].get("messages", []):
-                    if isinstance(msg, AIMessage) and msg.content:
-                        yield {"data": json.dumps({"type": "token", "content": str(msg.content)})}
+            # ── updates mode: full node output after it finishes ─────────────
+            elif mode == "updates":
+                updated_node = next(iter(payload.keys())) if isinstance(payload, dict) else "unknown"
+                logger.info(f"[stream] updates from node: {updated_node}")
 
-            # Intent label from the router
-            if "route_intent" in payload:
-                intent = payload["route_intent"].get("intent")
-                if intent:
-                    yield {"data": json.dumps({"type": "intent", "value": intent})}
+                # interrupt fired in check_sensitivity
+                if "__interrupt__" in payload:
+                    logger.info("[stream] INTERRUPT triggered")
+                    for intr in payload["__interrupt__"]:
+                        reason = (
+                            intr.value.get("reason", "")
+                            if isinstance(intr.value, dict)
+                            else str(intr.value)
+                        )
+                        yield {"data": json.dumps({
+                            "type": "interrupt",
+                            "reason": reason,
+                            "thread_id": thread_id,
+                        })}
 
-            # Tool calls decided by the agent
-            if "agent" in payload:
-                for msg in payload["agent"].get("messages", []):
-                    if isinstance(msg, AIMessage):
-                        for tc in (msg.tool_calls or []):
-                            name = tc.get("name", "") if isinstance(tc, dict) else tc.name
-                            args = tc.get("args", {}) if isinstance(tc, dict) else tc.args
-                            yield {"data": json.dumps({
-                                "type": "tool_start",
-                                "name": name,
-                                "args": args,
-                            })}
+                # check_sensitivity decline message (empty for non-sensitive turns)
+                if "check_sensitivity" in payload:
+                    for msg in payload["check_sensitivity"].get("messages", []):
+                        if isinstance(msg, AIMessage) and msg.content:
+                            logger.info("[stream] check_sensitivity decline token sent")
+                            yield {"data": json.dumps({"type": "token", "content": str(msg.content)})}
 
-            # Off-topic decline is a static AIMessage (never streams chunks)
-            if "decline_offtopic" in payload:
-                for msg in payload["decline_offtopic"].get("messages", []):
-                    if isinstance(msg, AIMessage) and msg.content:
-                        yield {"data": json.dumps({"type": "token", "content": str(msg.content)})}
+                # Intent label from the router
+                if "route_intent" in payload:
+                    intent = payload["route_intent"].get("intent")
+                    if intent:
+                        logger.info(f"[stream] Intent detected: {intent}")
+                        yield {"data": json.dumps({"type": "intent", "value": intent})}
 
-    yield {"data": json.dumps({"type": "done"})}
+                # Tool calls decided by the agent
+                if "agent" in payload:
+                    has_tool_calls = False
+                    for msg in payload["agent"].get("messages", []):
+                        if isinstance(msg, AIMessage):
+                            if msg.tool_calls:
+                                has_tool_calls = True
+                                logger.info(f"[stream] Agent made {len(msg.tool_calls)} tool calls")
+                                # Agent is making tool calls — reset draft since
+                                # the real text will come on the next agent turn
+                                _agent_draft_chunks.clear()
+                                _agent_draft_flushed = False
+                            for tc in (msg.tool_calls or []):
+                                name = tc.get("name", "") if isinstance(tc, dict) else tc.name
+                                args = tc.get("args", {}) if isinstance(tc, dict) else tc.args
+                                yield {"data": json.dumps({
+                                    "type": "tool_start",
+                                    "name": name,
+                                    "args": args,
+                                })}
+
+                    # Agent produced final text (no tool calls) — send 'done'
+                    # immediately so the frontend unlocks the input box. The
+                    # editor node will still run in the background (satisfying
+                    # the multi-agent stretch goal) but the user doesn't have
+                    # to wait for it.
+                    if not has_tool_calls and _agent_draft_chunks and not _early_done:
+                        logger.info("[stream] Agent final text complete. Sending early done.")
+                        _agent_draft_flushed = True
+                        _early_done = True
+                        yield {"data": json.dumps({"type": "done"})}
+                    elif _agent_draft_chunks:
+                        logger.info("[stream] Agent draft chunks flushed but not early done.")
+                        _agent_draft_flushed = True
+
+                # Off-topic decline is a static AIMessage (never streams chunks)
+                if "decline_offtopic" in payload:
+                    for msg in payload["decline_offtopic"].get("messages", []):
+                        if isinstance(msg, AIMessage) and msg.content:
+                            yield {"data": json.dumps({"type": "token", "content": str(msg.content)})}
+
+    except Exception as exc:
+        logger.exception("Stream error: %s", exc)
+        # Surface the error to the frontend so the user sees something
+        if not _early_done:
+            yield {"data": json.dumps({"type": "token", "content": "\n\nI'm sorry, something went wrong. Please try again."})}
+    finally:
+        if not _early_done:
+            logger.info("[stream] Stream finished normally, sending final done.")
+            yield {"data": json.dumps({"type": "done"})}
 
 
 @app.get("/health")

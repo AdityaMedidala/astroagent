@@ -80,6 +80,11 @@ export default function App() {
     setShowForm(false);
   }, []);
 
+  const handleClearBirthDetails = useCallback(() => {
+    setBirthDetails(null);
+    localStorage.removeItem(STORAGE_KEYS.birthDetails);
+  }, []);
+
   const handleClear = useCallback(() => {
     clearHistory();
     localStorage.removeItem(STORAGE_KEYS.messages);
@@ -95,6 +100,7 @@ export default function App() {
 
   return (
     <div className="app">
+      <div className="app-background"></div>
       {/* ── Header ────────────────────────────────────────────────────────── */}
       <header className="header">
         <div className="header__brand">
@@ -104,13 +110,23 @@ export default function App() {
 
         <div className="header__actions">
           {birthSummary ? (
-            <button
-              className="birth-chip"
-              onClick={() => setShowForm(true)}
-              title="Edit birth details"
-            >
-              ✦ {birthSummary}
-            </button>
+            <>
+              <button
+                className="birth-chip"
+                onClick={() => setShowForm(true)}
+                title="Edit birth details"
+              >
+                ✦ {birthSummary}
+              </button>
+              <button
+                className="btn-icon btn-icon--small"
+                onClick={handleClearBirthDetails}
+                title="Clear birth details"
+                aria-label="Clear birth details"
+              >
+                ✕
+              </button>
+            </>
           ) : (
             <button
               className="birth-chip"

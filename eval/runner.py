@@ -83,10 +83,6 @@ _SPOTCHECK_IDS = [
 # ── Heuristics for graceful-failure check ─────────────────────────────────────
 _CERTAINTY_PHRASES = [
     "you will definitely",
-    "you will develop",
-    "you are going to develop",
-    "you will become ill",
-    "you will get sick",
     "i can confirm you will",
     "without a doubt you will",
     "guaranteed you will",

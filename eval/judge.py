@@ -150,7 +150,7 @@ def _get_judge_llm():
     global _judge_llm
     if _judge_llm is None:
         _judge_llm = ChatGoogleGenerativeAI(
-            model="gemini-2.0-flash",
+            model="gemini-2.5-flash",
             temperature=0,          # deterministic for reproducibility
         ).with_structured_output(JudgeVerdict)
     return _judge_llm
