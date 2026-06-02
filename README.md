@@ -13,28 +13,33 @@ AstroAgent uses a stateful agent graph to route requests, execute tools, and ens
 ```mermaid
 %%{init: {'theme': 'base', 'themeVariables': { 'primaryColor': '#F0EDF8', 'primaryTextColor': '#2D2547', 'primaryBorderColor': '#8B7EC8', 'lineColor': '#6B5EA8', 'secondaryColor': '#FDF6E3', 'tertiaryColor': '#FFFFFF'}}}%%
 graph TD
-    classDef startend fill:#bfb6fc,stroke:#6B5EA8,stroke-width:2px,color:#2C2830,font-weight:bold,rx:10px,ry:10px;
-    classDef router fill:#FDF6E3,stroke:#B8892A,stroke-width:2px,color:#2C2830,rx:5px,ry:5px;
-    classDef agent fill:#FFFFFF,stroke:#6B5EA8,stroke-width:2px,color:#2C2830,rx:5px,ry:5px;
-    classDef tools fill:#F0EDF8,stroke:#8B7EC8,stroke-width:2px,color:#2C2830,rx:5px,ry:5px;
-    classDef special fill:#FEF2F2,stroke:#C04A3E,stroke-width:2px,color:#2C2830,rx:5px,ry:5px;
+    classDef startend fill:#bfb6fc,stroke:#6B5EA8,stroke-width:2px,color:#2C2830,font-weight:bold;
+    classDef router fill:#FDF6E3,stroke:#B8892A,stroke-width:2px,color:#2C2830;
+    classDef agent fill:#FFFFFF,stroke:#6B5EA8,stroke-width:2px,color:#2C2830;
+    classDef tools fill:#F0EDF8,stroke:#8B7EC8,stroke-width:2px,color:#2C2830;
+    classDef special fill:#FEF2F2,stroke:#C04A3E,stroke-width:2px,color:#2C2830;
 
-    Start([Start]):::startend --> Router{Intent Router}:::router
-    
-    Router -- "Off-topic" --> Decline[Decline gracefully]:::special
-    Router -- "Astrology" --> SensCheck{Sensitivity Check}:::router
-    
-    SensCheck -- "Sensitive (HITL)" --> Pause((Human Approval)):::special
+    Start([Start]):::startend
+    Router{Intent Router}:::router
+    SensCheck{Sensitivity Check}:::router
+    Decline[Decline gracefully]:::special
+    Pause((Human Approval)):::special
+    Agent(Reasoning Agent):::agent
+    Tools[(Tools)]:::tools
+    Editor(Tone Editor):::agent
+    End([End]):::startend
+
+    Start --> Router
+    Router -- "Off-topic" --> Decline
+    Router -- "Astrology" --> SensCheck
+    SensCheck -- "Sensitive (HITL)" --> Pause
+    SensCheck -- "Standard" --> Agent
     Pause -- "Approved" --> Agent
     Pause -- "Declined" --> End
-    
-    SensCheck -- "Standard" --> Agent(Reasoning Agent):::agent
-    
-    Agent -->|Needs data| Tools[(Tools)]:::tools
+    Agent -->|Needs data| Tools
     Tools -->|Results| Agent
-    
-    Agent -->|Draft ready| Editor(Tone Editor):::agent
-    Decline --> End([End]):::startend
+    Agent -->|Draft ready| Editor
+    Decline --> End
     Editor --> End
 ```
 
