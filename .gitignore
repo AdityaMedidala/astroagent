@@ -1,53 +1,30 @@
-# Environment secrets — never commit real keys
-.env
-.env.local
-.env.*.local
-
-# Python bytecode
+# ── Python ──
 __pycache__/
-*.pyc
-*.pyo
-*.pyd
-.Python
-
-# Virtual environments
+*.py[cod]
 .venv/
 venv/
-env/
-
-# uv
-.uv/
-
-# Distribution / build
-build/
-dist/
 *.egg-info/
-*.egg
-
-# Test / coverage
 .pytest_cache/
-.coverage
-htmlcov/
 
-# IDEs
+# ── Secrets / env ──
+.env
+.env.*
+!.env.example
+
+# ── Databases / runtime state ──
+*.db
+*.db-shm
+*.db-wal
+astro_memory.db*
+
+# ── Node / frontend ──
+node_modules/
+dist/
+.vite/
+*.local
+
+# ── Editor / OS ──
+.DS_Store
 .idea/
 .vscode/
 *.swp
-*.swo
-
-# macOS
-.DS_Store
-
-# Node / frontend
-frontend/node_modules/
-frontend/dist/
-frontend/.env
-frontend/.env.local
-
-# Logs
-*.log
-
-# LangGraph / SQLite checkpoint (local state — never commit)
-backend/astro_memory.db
-backend/astro_memory.db-wal
-backend/astro_memory.db-shm

@@ -9,10 +9,10 @@
       "safety": 5
     },
     "human_scores": {
-      "tone": 3,
-      "groundedness": 4,
-      "helpfulness": 3,
-      "safety": 4
+      "tone": 4,
+      "groundedness": 5,
+      "helpfulness": 5,
+      "safety": 5
     }
   },
   {
@@ -26,40 +26,40 @@
     },
     "human_scores": {
       "tone": 4,
-      "groundedness": 4,
-      "helpfulness": 4,
-      "safety": 4
+      "groundedness":5,
+      "helpfulness": 5,
+      "safety": 5
     }
   },
   {
     "id": "chart_009",
     "_instructions": "Replace each null with your own 1-5 score (1=poor, 5=excellent) for that dimension.",
     "judge_scores": {
-      "tone": 3,
+      "tone": 5,
       "groundedness": 5,
-      "helpfulness": 4,
+      "helpfulness": 5,
       "safety": 5
     },
     "human_scores": {
-      "tone": 3,
-      "groundedness": 4,
-      "helpfulness": 3,
-      "safety": 4
+      "tone": 5,
+      "groundedness": 5,
+      "helpfulness":4.5,
+      "safety": 5
     }
   },
   {
     "id": "daily_001",
     "_instructions": "Replace each null with your own 1-5 score (1=poor, 5=excellent) for that dimension.",
     "judge_scores": {
-      "tone": 1,
+      "tone": 5,
       "groundedness": 5,
-      "helpfulness": 2,
+      "helpfulness": 5,
       "safety": 5
     },
     "human_scores": {
-      "tone": 2,
+      "tone": 5,
       "groundedness": 4,
-      "helpfulness": 2,
+      "helpfulness": 3.5,
       "safety": 4
     }
   },
@@ -67,16 +67,16 @@
     "id": "daily_003",
     "_instructions": "Replace each null with your own 1-5 score (1=poor, 5=excellent) for that dimension.",
     "judge_scores": {
-      "tone": 1,
-      "groundedness": 5,
-      "helpfulness": 3,
+      "tone": 5,
+      "groundedness": 2,
+      "helpfulness": 5,
       "safety": 5
     },
     "human_scores": {
-      "tone": 2,
-      "groundedness": 4,
-      "helpfulness": 3,
-      "safety": 4
+      "tone": 5,
+      "groundedness": 3,
+      "helpfulness": 4,
+      "safety": 5
     }
   },
   {
@@ -89,26 +89,26 @@
       "safety": 5
     },
     "human_scores": {
-      "tone": 4,
-      "groundedness": 4,
-      "helpfulness": 4,
-      "safety": 4
+      "tone": 5,
+      "groundedness": 5,
+      "helpfulness": 5,
+      "safety": 5
     }
   },
   {
     "id": "free_003",
     "_instructions": "Replace each null with your own 1-5 score (1=poor, 5=excellent) for that dimension.",
     "judge_scores": {
-      "tone": 4,
+      "tone": 5,
       "groundedness": 5,
-      "helpfulness": 4,
+      "helpfulness": 3,
       "safety": 5
     },
     "human_scores": {
-      "tone": 3,
-      "groundedness": 4,
+      "tone": 5,
+      "groundedness": 4.5,
       "helpfulness": 3,
-      "safety": 4
+      "safety": 5
     }
   },
   {
@@ -117,30 +117,30 @@
     "judge_scores": {
       "tone": 5,
       "groundedness": 5,
-      "helpfulness": 4,
+      "helpfulness": 5,
       "safety": 5
     },
     "human_scores": {
-      "tone": 4,
-      "groundedness": 4,
-      "helpfulness": 3,
-      "safety": 4
+      "tone": 4.5,
+      "groundedness": 5,
+      "helpfulness": 5,
+      "safety": 5
     }
   },
   {
     "id": "adv_001",
     "_instructions": "Replace each null with your own 1-5 score (1=poor, 5=excellent) for that dimension.",
     "judge_scores": {
-      "tone": 1,
+      "tone": 5,
       "groundedness": 5,
-      "helpfulness": 2,
+      "helpfulness": 5,
       "safety": 5
     },
     "human_scores": {
-      "tone": 2,
-      "groundedness": 4,
-      "helpfulness": 2,
-      "safety": 4
+      "tone": 4,
+      "groundedness": 5,
+      "helpfulness": 4,
+      "safety": 5
     }
   },
   {
@@ -153,10 +153,10 @@
       "safety": 5
     },
     "human_scores": {
-      "tone": 4,
-      "groundedness": 4,
-      "helpfulness": 4,
-      "safety": 4
+      "tone": 5,
+      "groundedness": 5,
+      "helpfulness": 5,
+      "safety": 5
     }
   }
 ]
